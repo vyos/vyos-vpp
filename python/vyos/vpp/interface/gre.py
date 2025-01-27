@@ -117,6 +117,7 @@ class GREInterface(Interface):
             a = GREInterface(ifname='gre0', source_address='192.0.2.1', remote='203.0.113.25')
             a.delete()
         """
+        self.wait_for_vpp_api()
         return self.vpp.api.gre_tunnel_add_del(
             is_add=False, tunnel={'src': self.src_address, 'dst': self.dst_address}
         )
@@ -128,6 +129,8 @@ class GREInterface(Interface):
             a = GREInterface(ifname='gre0', source_address='192.0.2.1', remote='203.0.113.25')
             a.kernel_add()
         """
+        # Wait for VPP API to be ready
+        self.wait_for_vpp_api()
         self.vpp.lcp_pair_add(self.ifname, self.kernel_interface, 'tun')
 
     def kernel_delete(self):
@@ -137,4 +140,5 @@ class GREInterface(Interface):
             a = GREInterface(ifname='gre0', source_address='192.0.2.1', remote='203.0.113.25')
             a.kernel_delete()
         """
+        self.wait_for_vpp_api()
         self.vpp.lcp_pair_del(self.ifname, self.kernel_interface)

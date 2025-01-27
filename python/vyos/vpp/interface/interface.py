@@ -15,6 +15,7 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
+import time
 from vyos.vpp import VPPControl
 
 
@@ -47,3 +48,27 @@ class Interface:
         """
         if_index = self.vpp.get_sw_if_index(self.ifname)
         return self.vpp.api.sw_interface_dump(sw_if_index=if_index)[0]['flags']
+
+    def wait_for_vpp_api(self, retries=10, delay=1):
+        """
+        Waits for the VPP API to become available.
+
+        Args:
+            retries (int): Number of times to retry checking the API readiness.
+            delay (int): Time in seconds to wait between retries.
+
+        Raises:
+            RuntimeError: If the VPP API is not ready after the specified retries.
+        """
+        for attempt in range(retries):
+            try:
+                # Attempt to connect to the VPP API or call a test method
+                if self.vpp.api.show_version():
+                    print("VPP API is ready.")
+                    return
+                else:
+                    raise RuntimeError("VPP API is not connected.")
+            except Exception as e:
+                print(f"Attempt {attempt + 1}/{retries}: VPP API not ready - {e}")
+                time.sleep(delay)
+        raise RuntimeError("VPP API did not become ready within the expected time.")

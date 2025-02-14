@@ -69,6 +69,22 @@ override_drivers: dict[str, str] = {
 # drivers that does not use PCIe addresses
 not_pci_drv: list[str] = ['hv_netvsc']
 
+# drivers that support interrupt RX mode for DPDK and XDP
+drivers_support_interrupt: dict[str, list] = {
+    'atlantic': ['dpdk', 'xdp'],
+    'bnx2x': ['dpdk'],
+    'e1000': ['dpdk'],
+    'ena': ['dpdk', 'xdp'],
+    'i40e': ['dpdk', 'xdp'],
+    'ice': ['dpdk', 'xdp'],
+    'igb': ['xdp'],
+    'igc': ['dpdk', 'xdp'],
+    'ixgbe': ['dpdk', 'xdp'],
+    'qede': ['dpdk', 'xdp'],
+    'vmxnet3': ['xdp'],
+    'virtio_net': ['xdp'],
+}
+
 
 def get_config(config=None):
     # use persistent config to store interfaces data between executions
@@ -331,6 +347,20 @@ def verify(config):
 
         if iface_config['driver'] == 'dpdk' and 'xdp_options' in iface_config:
             raise ConfigError('XDP options are not applicable for DPDK driver!')
+
+        # RX-mode verification
+        rx_mode = iface_config.get('rx_mode')
+        if rx_mode and rx_mode != 'polling':
+            # By default drivers operate in polling mode. Not all NIC drivers support
+            # RX mode interrupt and adaptive
+            driver = config.get('persist_config').get(iface).get('original_driver')
+            if (
+                    driver not in drivers_support_interrupt
+                    or iface_config['driver'] not in drivers_support_interrupt[driver]
+            ):
+                raise ConfigError(
+                    f'RX mode {rx_mode} is not supported for interface {iface}'
+                )
 
     # check GRE tunnels as part of the bridge, only tunnel-type teb is allowed
     #   set vpp interfaces bridge br1 member interface gre1
@@ -604,7 +634,16 @@ def apply(config):
             if iface not in Section.interfaces():
                 vpp_control.lcp_pair_add(iface, iface)
 
-            # Set rx-mode
+            # For unknown reasons, if multiple interfaces later try to be
+            # initialized by configuration scripts, some of them may stuck
+            # in an endless UP/DOWN loop
+            # We found two workarounds - pause initialization (requires
+            # main code modifications).
+            # And this one
+            dev_index = iproute.link_lookup(ifname=iface)[0]
+            iproute.link('set', index=dev_index, state='up')
+
+            # Set rx-mode. Should be configured after interface state set to UP
             rx_mode = iface_config.get('rx_mode')
             if rx_mode:
                 # to hardware side
@@ -614,15 +653,6 @@ def apply(config):
                     'vpp_name_kernel'
                 )
                 vpp_control.iface_rxmode(lcp_name, rx_mode)
-
-            # For unknown reasons, if multiple interfaces later try to be
-            # initialized by configuration scripts, some of them may stuck
-            # in an endless UP/DOWN loop
-            # We found two workarounds - pause initialization (requires
-            # main code modifications).
-            # And this one
-            dev_index = iproute.link_lookup(ifname=iface)[0]
-            iproute.link('set', index=dev_index, state='up')
 
         # Syncronize routes via LCP
         vpp_control.lcp_resync()

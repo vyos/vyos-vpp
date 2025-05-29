@@ -47,8 +47,9 @@ from vyos.vpp.config_verify import (
     verify_vpp_memory,
     verify_vpp_statseg_size,
     verify_vpp_interfaces_dpdk_num_queues,
+    verify_vpp_used_cpu_cores,
 )
-from vyos.vpp.config_resource_checks.cpu import available_cpus
+from vyos.vpp.config_resource_checks.cpu import available_cores_list
 from vyos.vpp.config_resource_checks.resource_defaults import get_resource_defaults
 from vyos.vpp.config_filter import iface_filter_eth
 from vyos.vpp.utils import EthtoolGDrvinfo
@@ -329,25 +330,16 @@ def verify(config):
                 Warning(f'Not all RX queues will be connected to VPP for {iface}!')
 
         if iface_config['driver'] == 'dpdk' and 'dpdk_options' in iface_config:
-            skip_cores = int(
-                config.get('settings', {}).get('cpu', {}).get('skip_cores', 0)
-            )
             if 'num_rx_queues' in iface_config['dpdk_options']:
                 rx_queues = int(iface_config['dpdk_options']['num_rx_queues'])
                 verify_vpp_interfaces_dpdk_num_queues(
-                    qtype='receive',
-                    num_queues=rx_queues,
-                    reserved_cpus=resource_defaults.get('reserved_cpu_cores'),
-                    skip_cores=skip_cores,
+                    qtype='receive', num_queues=rx_queues, settings=config['settings']
                 )
 
             if 'num_tx_queues' in iface_config['dpdk_options']:
                 tx_queues = int(iface_config['dpdk_options']['num_tx_queues'])
                 verify_vpp_interfaces_dpdk_num_queues(
-                    qtype='transmit',
-                    num_queues=tx_queues,
-                    reserved_cpus=resource_defaults.get('reserved_cpu_cores'),
-                    skip_cores=skip_cores,
+                    qtype='transmit', num_queues=tx_queues, settings=config['settings']
                 )
 
         if iface_config['driver'] == 'xdp' and 'dpdk_options' in iface_config:
@@ -415,6 +407,7 @@ def verify(config):
     # Resource usage checks
     workers = 0
     skip_cores = 0
+    cpu_reserve = resource_defaults.get('reserved_cpu_cores')
 
     if 'cpu' in config['settings']:
         cpu_settings = config['settings']['cpu']
@@ -424,19 +417,33 @@ def verify(config):
             skip_cores = int(cpu_settings['skip_cores'])
             verify_vpp_settings_cpu_skip_cores(skip_cores)
 
-        available_cores = available_cpus(
-            reserved_cpus=resource_defaults.get('reserved_cpu_cores'),
-            skip_cores=skip_cores,
-        )
+            # Ensure at least 2 CPU cores are reserved by skip-cores
+            if skip_cores == 0:
+                cpu_reserve = resource_defaults.get('reserved_cpu_cores')
+            elif skip_cores == 1:
+                cpu_reserve = skip_cores + 1
+            else:
+                cpu_reserve = skip_cores
 
         # Check whether the workers and corelist_workers are configured properly
         verify_vpp_settings_cpu_and_corelist_workers(cpu_settings)
 
+        # Check if there are enough CPU cores and memory to add workers
+        if 'workers' in cpu_settings:
+            workers = verify_vpp_settings_cpu_workers(
+                skip_cores=cpu_reserve, config=config, defaults=resource_defaults
+            )
+
         if 'main_core' in cpu_settings:
+            available_cores = available_cores_list(skip_cores)
+
             # Check that the main core is available
             main_core = int(cpu_settings['main_core'])
             if main_core not in available_cores:
-                raise ConfigError(f'"cpu main-core {main_core}" is not available!')
+                raise ConfigError(
+                    'Cannot set main core for VPP process:\n'
+                    f'CPU#{main_core} is not available.\n'
+                )
 
             # Check the CPU main core not falling to the corelist-workers
             if 'corelist_workers' in cpu_settings:
@@ -444,13 +451,11 @@ def verify(config):
                     cpus=available_cores,
                     main_core=main_core,
                     workers=cpu_settings['corelist_workers'],
+                    reserved_cores=cpu_reserve,
                 )
-
-        # Check if there are enough CPU cores and memory to add workers
-        if 'workers' in cpu_settings:
-            workers = verify_vpp_settings_cpu_workers(
-                skip_cores=skip_cores, config=config, defaults=resource_defaults
-            )
+        # Check overall CPU settings and ensure there are enough cores in system
+        # The check assumes that at least 2 cores are reserved for system use
+        verify_vpp_used_cpu_cores(cpu_settings, cpu_reserve)
 
     if 'workers' in config['settings']['nat44']:
         verify_vpp_nat44_workers(
@@ -458,7 +463,7 @@ def verify(config):
         )
 
     # Check if available memory is enough for current VPP config
-    verify_vpp_memory(config, resource_defaults, skip_cores)
+    verify_vpp_memory(config, resource_defaults, cpu_reserve)
 
     if 'host_resources' in config['settings']:
         if (

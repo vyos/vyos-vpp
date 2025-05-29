@@ -282,9 +282,10 @@ def verify_vpp_settings_cpu_workers(
     Verify that the system has enough available CPU cores and RAM for bufferization
     to run a given amount of worker processes (1 worker/core)
     """
-    workers = int(config.get('settings', {}).get('cpu', {}).get('workers', 0))
+    cpu_settings = config.get('settings', {}).get('cpu', {})
+    workers = int(cpu_settings.get('workers', 0))
     available_memory = mem_checks.available_memory(config, defaults, skip_cores)
-    available_cores = total_core_count() - 1 - (skip_cores or 1)
+    available_cores = cpu_checks.available_cores_count(cpu_settings)
 
     if workers > available_cores:
         raise ConfigError(
@@ -306,41 +307,50 @@ def verify_vpp_settings_cpu_workers(
             f'available: {round(available_memory / 1024 ** 3, 1)} GB\n'
             f'required: {round(memory_required / 1024 ** 3, 1)} GB\n'
         )
-    # try:
-    #
-    # except ConfigError as e:
-    #     raise e
 
     return workers
 
 
 def verify_vpp_settings_cpu_corelist_workers(
-    cpus: int, main_core: int, workers: str
+    cpus: int, main_core: int, workers: str, reserved_cores: int
 ) -> int:
     """
     Verify that the CPU cores provided to the config are free and can be used by VPP
     """
     try:
-        all_core_nums = cpu_checks.worker_core_numbers(
+        all_core_nums = cpu_checks.worker_cores_list(
             iface='cpu corelist', worker_ranges=workers
         )
     except ValueError as e:
         raise ConfigError(str(e))
     else:
+        all_cores_count = len(all_core_nums)
+
         if main_core in all_core_nums:
             raise ConfigError(
-                f'"cpu main-core {main_core}" must not be included in the corelist-workers!'
+                'Cannot set VPP workers core list:\n'
+                f'CPU#{main_core} is set as main core and should not be included '
+                'to the corelist-workers.\n'
             )
 
         if not all(el in cpus for el in all_core_nums):
-            raise ConfigError('"cpu corelist-workers" is not correct')
+            raise ConfigError(
+                'Cannot set VPP workers core list:\n'
+                'Provided worker core ranges are not correct.\n'
+            )
 
-        return len(all_core_nums)
+        if all_cores_count > (total_core_count() - reserved_cores):
+            raise ConfigError(
+                'Cannot set VPP workers core list:\n'
+                'At least 2 CPU cores should be reserved for the system use.\n'
+            )
+
+        return all_cores_count
 
 
 def verify_vpp_nat44_workers(workers: int, nat44_workers: str):
     try:
-        nat_workers = cpu_checks.worker_core_numbers(
+        nat_workers = cpu_checks.worker_cores_list(
             iface='nat44', worker_ranges=nat44_workers
         )
     except ValueError as e:
@@ -348,6 +358,18 @@ def verify_vpp_nat44_workers(workers: int, nat44_workers: str):
     else:
         if not all(el in list(range(workers)) for el in nat_workers):
             raise ConfigError('"nat44" is not correct')
+
+
+def verify_vpp_used_cpu_cores(cpu_settings: dict, reserved_cores: int):
+    used_core_count = cpu_checks.predicted_used_cores_count(cpu_settings)
+
+    if used_core_count > (total_core_count() - reserved_cores):
+        raise ConfigError(
+            'Not enough CPU cores to start VPP: '
+            f'Total cores: {total_core_count()}\n'
+            f'Required by VPP: {used_core_count} '
+            '(at least 2 cores should be reserved for system)'
+        )
 
 
 def verify_vpp_statseg_size(settings: dict, statseg_heap_size: str):
@@ -366,19 +388,16 @@ def verify_vpp_statseg_size(settings: dict, statseg_heap_size: str):
             )
 
 
-def verify_vpp_interfaces_dpdk_num_queues(
-    qtype: str, num_queues: int, reserved_cpus: int, **kwargs
-):
+def verify_vpp_interfaces_dpdk_num_queues(qtype: str, num_queues: int, settings: dict):
     """
     Verify that the system has enough CPU cores to run the given amount of RX/TX queues
     1 queue per 1 core is assumed as default
     """
-    skip_cores = kwargs.get('skip_cores', 0)
-    available_cpus = cpu_checks.available_core_count(reserved_cpus, skip_cores)
+    cores = cpu_checks.available_cores_count(settings)
 
-    if num_queues > available_cpus:
+    if num_queues > cores:
         raise ConfigError(
             f'The number of {qtype} queues cannot be greater than the number of available CPUs:\n'
-            f'available: {available_cpus}\n'
+            f'available: {cores}\n'
             f'requested: {num_queues}'
         )

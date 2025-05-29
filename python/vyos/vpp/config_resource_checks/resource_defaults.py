@@ -28,7 +28,7 @@ __default_resource_map = {
     # Default hugepage size for VPP
     'hugepage_size': '2M',
     # Default amount of memory allocated for VPP exclusive usage
-    'main_heap_size': '1G',
+    'main_heap_size': '4G',
     # Default main heap page size
     'main_heap_page_size': '2M',
     # Default size of buffers transferred via netlink
@@ -40,10 +40,10 @@ __default_resource_map = {
     # Minimal number of physical CPU cores required to start VPP
     'min_cpus': 4,
     # Reserve at least 2 gigabytes of memory
-    'reserved_memory': '2G',
+    'reserved_memory': '4G',
     # Reserve at least 2 physical cores
     'reserved_cpu_cores': 2,
-    # Default heap size for IPv6 routes
+    # Default heap size for IPv6
     'ipv6_heap_size': '32M',
 }
 
